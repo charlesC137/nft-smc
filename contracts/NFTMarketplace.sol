@@ -25,12 +25,15 @@ contract NFTMarketplace is
     uint256 private _royalties = 5;
 
     bytes32 private constant VOUCHER_TYPEHASH =
-        keccak256("NFTVoucher(address creator,string uri,uint256 price)");
+        keccak256(
+            "NFTVoucher(address creator,string uri,uint256 price,uint256 expiry,bool listItem)"
+        );
 
     struct NFTItem {
-        uint256 id;
+        uint256 tokenId;
         address creator;
         address currentOwner;
+        string uri;
         uint256 price;
         bool isListed;
         uint256 createdAt;
@@ -41,6 +44,7 @@ contract NFTMarketplace is
         string uri;
         uint256 price;
         uint256 expiry;
+        bool listItem;
     }
 
     mapping(uint256 => NFTItem) public idToNFTItem;
@@ -50,6 +54,16 @@ contract NFTMarketplace is
         address indexed from,
         address indexed to,
         uint256 indexed tokenId
+    );
+
+    event NFTMinted(
+        uint256 tokenId,
+        address creator,
+        address owner,
+        string uri,
+        uint256 price,
+        bool isListed,
+        uint256 createdAt
     );
 
     modifier nftExists(uint256 tokenID) {
@@ -95,7 +109,9 @@ contract NFTMarketplace is
                         VOUCHER_TYPEHASH,
                         voucher.creator,
                         keccak256(bytes(voucher.uri)),
-                        voucher.price
+                        voucher.price,
+                        voucher.expiry,
+                        voucher.listItem
                     )
                 )
             );
@@ -106,28 +122,56 @@ contract NFTMarketplace is
         bytes calldata signature
     ) external payable {
         bytes32 sigHash = keccak256(signature);
-
         require(!usedSignatures[sigHash], "Signature already used");
-        require(msg.value >= voucher.price, "Insufficient payment");
         require(block.timestamp <= voucher.expiry, "Voucher expired");
+        require(bytes(voucher.uri).length > 0, "URI required");
 
         bytes32 digest = _hash(voucher);
         address signer = ECDSA.recover(digest, signature);
-
         require(signer == voucher.creator, "Invalid signature");
 
         usedSignatures[sigHash] = true;
 
-        _nextTokenId++;
-        uint256 tokenId = _nextTokenId;
+        uint256 tokenId;
+        unchecked {
+            tokenId = ++_nextTokenId;
+        }
 
-        _safeMint(msg.sender, tokenId);
+        // Mint to creator first
+        _safeMint(voucher.creator, tokenId);
         _setTokenURI(tokenId, voucher.uri);
 
-        idToNFTItem[tokenId].creator = voucher.creator;
+        bool listImmediately = (msg.sender != voucher.creator);
 
-        (bool sent, ) = payable(voucher.creator).call{value: msg.value}("");
-        require(sent, "Payment failed");
+        if (!listImmediately) {
+            listImmediately = voucher.listItem;
+        }
+
+        idToNFTItem[tokenId] = NFTItem({
+            tokenId: tokenId,
+            creator: voucher.creator,
+            currentOwner: voucher.creator,
+            price: voucher.price,
+            isListed: listImmediately, // list only if buyer is minting
+            createdAt: block.timestamp,
+            uri: voucher.uri
+        });
+
+        emit NFTMinted(
+            tokenId,
+            voucher.creator,
+            voucher.creator,
+            voucher.uri,
+            voucher.price,
+            listImmediately,
+            idToNFTItem[tokenId].createdAt
+        );
+
+        if (msg.sender != voucher.creator) {
+            require(msg.value >= voucher.price, "Insufficient payment");
+
+            this.buyNFT{value: msg.value}(tokenId);
+        }
     }
 
     function listNFT(
@@ -136,21 +180,7 @@ contract NFTMarketplace is
     ) public isOwner(tokenID) nftExists(tokenID) notListed(tokenID) {
         require(price > 0, "Price must be greater than 0");
 
-        NFTItem storage nft = idToNFTItem[tokenID];
-
-        if (nft.id == 0) {
-            idToNFTItem[tokenID] = NFTItem({
-                id: tokenID,
-                currentOwner: ownerOf(tokenID),
-                price: price,
-                isListed: true,
-                createdAt: block.timestamp,
-                creator: idToNFTItem[tokenID].creator
-            });
-        } else {
-            nft.isListed = true;
-            nft.price = price;
-        }
+        idToNFTItem[tokenID].isListed = true;
     }
 
     function unlistNFT(
@@ -215,7 +245,7 @@ contract NFTMarketplace is
         uint256 validCount = 0;
 
         for (uint256 i = 0; i < total; i++) {
-            if (idToNFTItem[i + 1].id != 0) {
+            if (idToNFTItem[i + 1].creator != address(0)) {
                 validCount++;
             }
         }
@@ -225,14 +255,15 @@ contract NFTMarketplace is
 
         for (uint256 i = 0; i < total; i++) {
             NFTItem memory nft = idToNFTItem[i + 1];
-            if (nft.id != 0) {
+            if (nft.tokenId != 0) {
                 items[count] = NFTItem({
-                    id: nft.id,
+                    tokenId: nft.tokenId,
                     creator: nft.creator,
-                    currentOwner: ownerOf(nft.id),
+                    currentOwner: ownerOf(nft.tokenId),
                     price: nft.price,
                     isListed: nft.isListed,
-                    createdAt: nft.createdAt
+                    createdAt: nft.createdAt,
+                    uri: nft.uri
                 });
                 count++;
             }
