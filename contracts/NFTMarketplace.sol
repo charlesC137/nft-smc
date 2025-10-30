@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Compatible with OpenZeppelin Contracts ^5.0.0
-pragma solidity ^0.8.27;
+pragma solidity ^0.8.28;
 
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {ERC721URIStorage} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
@@ -96,7 +96,7 @@ contract NFTMarketplace is
     )
         ERC721("NFTMarketplace", "WMNFT")
         Ownable(initialOwner)
-        EIP712("NFTMarketPlace", "1")
+        EIP712("NFTMarketplace", "1")
     {}
 
     function _hash(
@@ -127,7 +127,9 @@ contract NFTMarketplace is
         require(bytes(voucher.uri).length > 0, "URI required");
 
         bytes32 digest = _hash(voucher);
+
         address signer = ECDSA.recover(digest, signature);
+
         require(signer == voucher.creator, "Invalid signature");
 
         usedSignatures[sigHash] = true;
